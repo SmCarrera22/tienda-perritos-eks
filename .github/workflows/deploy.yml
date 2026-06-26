@@ -1,0 +1,125 @@
+name: CI CD Tienda Perritos EKS
+
+on:
+  push:
+    branches: ["deploy"]
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  EKS_NAMESPACE: tienda
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS Academy
+        run: |
+          mkdir -p ~/.aws
+          cat > ~/.aws/credentials << EOF
+          [default]
+          aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_session_token=${{ secrets.AWS_SESSION_TOKEN }}
+          EOF
+
+          cat > ~/.aws/config << EOF
+          [default]
+          region=${{ env.AWS_REGION }}
+          output=json
+          EOF
+
+      - name: Verificar identidad AWS
+        run: aws sts get-caller-identity
+
+      - name: Login a Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | \
+          docker login --username AWS --password-stdin \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Build y push backend
+        run: |
+          TAG=eks-${GITHUB_RUN_NUMBER}
+          IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/tienda-perritos-backend:${TAG}
+
+          docker build -t $IMAGE ./backend
+          docker push $IMAGE
+
+          echo "BACKEND_IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Configurar kubectl para EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+          kubectl get nodes
+
+      - name: Rolling update backend
+        run: |
+          kubectl -n $EKS_NAMESPACE set image \
+            deployment/tienda-backend \
+            backend=$BACKEND_IMAGE
+
+          kubectl -n $EKS_NAMESPACE rollout status deployment/tienda-backend
+
+  deploy-frontend:
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS Academy
+        run: |
+          mkdir -p ~/.aws
+          cat > ~/.aws/credentials << EOF
+          [default]
+          aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws_session_token=${{ secrets.AWS_SESSION_TOKEN }}
+          EOF
+
+          cat > ~/.aws/config << EOF
+          [default]
+          region=${{ env.AWS_REGION }}
+          output=json
+          EOF
+
+      - name: Login a Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | \
+          docker login --username AWS --password-stdin \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Build y push frontend
+        run: |
+          TAG=eks-${GITHUB_RUN_NUMBER}
+          IMAGE=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/tienda-perritos-frontend:${TAG}
+
+          docker build -t $IMAGE ./frontend
+          docker push $IMAGE
+
+          echo "FRONTEND_IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Configurar kubectl para EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name ${{ secrets.EKS_CLUSTER_NAME }}
+
+      - name: Rolling update frontend
+        run: |
+          kubectl -n $EKS_NAMESPACE set image \
+            deployment/tienda-frontend \
+            frontend=$FRONTEND_IMAGE
+
+          kubectl -n $EKS_NAMESPACE rollout status deployment/tienda-frontend

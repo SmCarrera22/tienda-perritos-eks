@@ -4,10 +4,10 @@ metadata:
   name: tienda-db
   namespace: tienda
 spec:
+  type: ClusterIP
   selector:
     app: tienda-db
   ports:
     - protocol: TCP
       port: 3306
       targetPort: 3306
-  clusterIP: None
